@@ -17,7 +17,7 @@ from PyQt5.QtCore import QSize, Qt, pyqtSlot, pyqtSignal, QTimer
 class myWidget( QWidget ):
     def __init__(self):
         QWidget.__init__(self)
-        # number of jackals to control (temporary value)
+        #jackal values 
         self.num_jackals = 1
         self.currentJackal = 0
         self.jackal_names = ["Disconnected"]
@@ -33,6 +33,9 @@ class myWidget( QWidget ):
         self.roll = numpy.zeros(self.num_jackals,dtype=float) 
         self.pitch = numpy.zeros(self.num_jackals,dtype=float)
         self.yaw = numpy.zeros(self.num_jackals,dtype=float)
+        self.x_odom = 0
+        self.y_odom = 0
+        self.yaw_odom = 0
         #label formating variables
         self.old_vel = 1
         self.old_ang = 1
@@ -54,7 +57,7 @@ class myWidget( QWidget ):
         #create pyqt layout
         self.createLayout()
 
-
+    #creates Qt layout
     def createLayout(self):
         #view buttons layout
         view_layout = QHBoxLayout()
@@ -80,6 +83,7 @@ class myWidget( QWidget ):
         side_layout = QVBoxLayout()
         side_layout.addLayout(control_box)
         side_layout.addLayout(speed_box)
+        side_layout.addWidget(self.labelPosition)
         side_layout.addWidget(self.labelOdom)
         side_layout.addWidget(self.robotSelector)
         #main window layout
@@ -88,7 +92,7 @@ class myWidget( QWidget ):
         main_layout.addLayout(side_layout)
         self.setLayout( main_layout )
 
-
+    #creates RViz view
     def createRViz(self):
         #main RViz window
         self.frame = rviz.VisualizationFrame()
@@ -116,7 +120,7 @@ class myWidget( QWidget ):
         self.sidepushButton = QtWidgets.QPushButton( "Side View" )
         self.sidepushButton.clicked.connect( self.onSideButtonClick )
 
-
+    #creates QPushButtons for controls
     def createPushButtons(self):
         #forwards
         self.pushButtonForwards = QtWidgets.QPushButton(self)
@@ -139,7 +143,7 @@ class myWidget( QWidget ):
         self.pushButtonRight.setText("Right")
         self.pushButtonRight.setAutoRepeat(True)        
 
-
+    #creates QDials for speed controls
     def createSpeedControls(self):
         #linear speed dial
         self.qdialspeed = QtWidgets.QDial(self)
@@ -166,29 +170,39 @@ class myWidget( QWidget ):
         self.labelAngVel.setText("Angular Speed : {} rad/s".format(self.ang))
         self.labelAngVel.adjustSize()
 
-
+    #creates position labels
     def createOdomLabels(self):
+        #create position label
+        self.labelPosition = QtWidgets.QLabel(self)
+        self.labelPosition.setObjectName('labelPosition')
+        self.labelPosition.setText("Gazebo\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x[self.currentJackal],self.y[self.currentJackal],self.yaw[self.currentJackal]))
+        self.labelPosition.adjustSize()
         #creating odom labels
         self.labelOdom = QtWidgets.QLabel(self)
-        self.labelOdom.setObjectName('labelPositon')
-        self.labelOdom.setText("Postion: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x[self.currentJackal],self.y[self.currentJackal],self.yaw[self.currentJackal]))
+        self.labelOdom.setObjectName('labelOdom')
+        self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom,self.y_odom,self.yaw_odom))
         self.labelOdom.adjustSize()
         #timer for odom update
         self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.updateLabelOdom)
+        self.timer.timeout.connect(self.updateLabelPosition)
         self.timer.start(500) #repeat every 1 sec        
 
+    #creates QComboBox to select which robot controled
     def createSelector(self):
         #create robot selctor menu using QComboBox
         self.robotSelector = QtWidgets.QComboBox(self)
         self.robotSelector.insertItems(0,self.jackal_names)
 
+    #populates QComboBox after subscription to gazebo node
     def updateSelector(self):
         self.robotSelector.clear()
         self.robotSelector.insertItems(0,self.jackal_names)
         nodeStr = self.jackal_names[0] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
+        node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
+        rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
 
+    #links signals for QT
     def connectControls(self):
          #behavior
         self.pushButtonForwards.pressed.connect(self.moveForward)
@@ -202,59 +216,81 @@ class myWidget( QWidget ):
         self.robotSelector.currentIndexChanged.connect(self.updateJackal)
 
 
-    #update labels
+    #update linear speed label
     def updateLabel(self):
         if self.qdialspeed.value() != self.old_vel:
             self.labelVel.setText("Linear Speed : {0:.0f} m/s".format(self.qdialspeed.value()))
             self.labelVel.adjustSize()
         self.old_vel = self.qdialspeed.value()
 
-
+    #update angular speed label
     def updateLabelAng(self):
         if self.qdialAngspeed.value() != self.old_ang:
             self.labelAngVel.setText("Angular Speed : {0:.0f} rad/s".format(self.qdialAngspeed.value()))
             self.labelVel.adjustSize()
         self.old_ang = self.qdialAngspeed.value()
 
+    def updateLabelPosition(self):
+        self.labelPosition.setText("Gazebo\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x[self.currentJackal],self.y[self.currentJackal],self.yaw[self.currentJackal]))
 
+    #update odometry position label
     def updateLabelOdom(self):
-        self.labelOdom.setText("Postion: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x[self.currentJackal],self.y[self.currentJackal],self.yaw[self.currentJackal]))
+        self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom,self.y_odom,self.yaw_odom))
 
+    #update current selected jackal from QComboBox
     def updateJackal(self):
         self.currentJackal = self.robotSelector.currentIndex()
         nodeStr = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
+        node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
+        rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
+        rospy.loginfo("Subscribed to: {}".format(self.jackal_names[self.currentJackal]))
+
+
+        #node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
+        #rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
         #rospy.loginfo("Index changed to: {}".format(self.currentJackal))
 
-    #publishing to ROS
+    #get odometry data from current jackal
+    def getOdom(self,msg):
+        #get odomoetry data for jackal
+        self.x_odom = msg.pose.pose.position.x
+        self.y_odom = msg.pose.pose.position.y
+        orientation_q = msg.pose.pose.orientation
+        orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
+        (roll_odom,pitch_odom,self.yaw_odom) = euler_from_quaternion(orientation_list)    
+        self.updateLabelOdom()   
+
+
+    #publishing forward velocity command
     def moveForward(self):
         command = Twist()
         command.linear.x = self.lin
         self.pub_vel.publish(command)
 
-
+    #publish backwards velocity command
     def moveBackwards(self):
         command = Twist()
         command.linear.x = self.lin*-1
         self.pub_vel.publish(command)
 
-
+    #publish left angular velocity command
     def moveLeft(self):
         command = Twist()
         command.angular.z = self.ang*1
         self.pub_vel.publish(command)
 
-
+    #publish right angular velocity command
     def moveRight(self):
         command = Twist()
         command.angular.z = self.ang*-1
         self.pub_vel.publish(command)
 
-
+    #update linear speed
     def updateLin(self):
         self.lin = self.qdialspeed.value()
 
-
+    #update angular speed
     def updateAng(self):
         self.ang = self.qdialAngspeed.value()
 
@@ -263,7 +299,7 @@ class myWidget( QWidget ):
     def onTopButtonClick( self ):
         self.switchToView( "Top View" );
         
-
+    #manage RViz side view
     def onSideButtonClick( self ):
         self.switchToView( "Side View" );
         
@@ -278,7 +314,7 @@ class myWidget( QWidget ):
         print( "Did not find view named %s." % view_name )
 
 
-    #ROS subscriber function
+    #ROS Gazebo subscriber function
     def findLoc(self, msg):
         object_names = msg.name
         self.jackal_names = object_names[self.otherObjects:]
@@ -312,6 +348,7 @@ if __name__ == '__main__':
         app = QtWidgets.QApplication([])
         myviz = myWidget()
         myviz.resize( 500, 500 )
+        #display window
         myviz.show()
         app.exec_()
     except rospy.ROSInterruptException:
