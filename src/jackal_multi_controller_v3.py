@@ -38,9 +38,9 @@ class myWidget( QWidget ):
         self.roll = numpy.zeros(self.num_jackals,dtype=float) 
         self.pitch = numpy.zeros(self.num_jackals,dtype=float)
         self.yaw = numpy.zeros(self.num_jackals,dtype=float)
-        self.x_odom = 0
-        self.y_odom = 0
-        self.yaw_odom = 0
+        self.x_odom = numpy.zeros(self.num_jackals,dtype=float)
+        self.y_odom = numpy.zeros(self.num_jackals,dtype=float)
+        self.yaw_odom = numpy.zeros(self.num_jackals,dtype=float)
         self.map_x = [0]
         self.map_y = [0]
         #label formating variables
@@ -60,11 +60,14 @@ class myWidget( QWidget ):
         self.createSelector()
         #connect all controls
         self.connectControls()
-
+'''
         self.graphView = QGraphicsView(self)
         self.graphScene = QGraphicsScene(self)
         self.graphPixmap = self.graphScene.addPixmap(QPixmap())
         self.graphView.setScene(self.graphScene); 
+'''
+
+        #create dynamic map
         self.createMap()
         #create pyqt layout
         self.createLayout()
@@ -92,12 +95,18 @@ class myWidget( QWidget ):
         side_layout.addWidget(self.robotSelector)
         #main window layout
         main_layout = QHBoxLayout()
-        main_layout.addWidget(self.graphView)
+        main_layout.addWidget(dynamic_canvas)
         main_layout.addLayout(side_layout)
         self.setLayout( main_layout )
 
     #creates position map
     def createMap(self):
+        self.dynamic_canvas = FigureCanvas(Figure(figsize=(5,3)))
+
+        self._dynamic_ax = self.dynamic_canvas.figure.subplots()
+        self._dynamic_timer = self.dynamic_canvas.new_timer(100, [(self.updateMap,(),{})])
+        self._dynamic_timer.start()
+'''
         sp = SubplotParams(left=0.,bottom=0.,right=1.,top=1.); 
         self.fig = Figure(subplotpars=sp); 
         self.canvas = FigureCanvas(self.fig); 
@@ -115,12 +124,12 @@ class myWidget( QWidget ):
         self.im = QImage(self.canvas.buffer_rgba(),width,height,QtGui.QImage.Format_ARGB32); 
         self.pm = QPixmap(self.im); 
         self.graphPixmap.setPixmap(self.pm)
-
+'''
     def updateMap(self):
-        #self.map_x.append(self.x[0])
-        #self.map_y.append(self.y[0])
-        self.ax.scatter(self.x[0],self.y[0])
-        self.canvas.draw()
+        self._dynamic_ax.clear()
+        t = np.linspace(0,10,501)
+        self._dynamic_ax.plot(t, np.sin(t + time.time()))
+        self._dynamic_ax.figure.canvas.draw()
 
     #creates QPushButtons for controls
     def createPushButtons(self):
@@ -182,12 +191,15 @@ class myWidget( QWidget ):
         #creating odom labels
         self.labelOdom = QtWidgets.QLabel(self)
         self.labelOdom.setObjectName('labelOdom')
-        self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom,self.y_odom,self.yaw_odom))
+        self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom[self.currentJackal],self.y_odom[self.currentJackal],self.yaw_odom[self.currentJackal]))
         self.labelOdom.adjustSize()
         #timer for odom update
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.updateLabelPosition)
-        self.timer.start(500) #repeat every 1 sec        
+        self.timer.start(500) #repeat every 1 sec    
+        self.timer2 = QtCore.QTimer()
+        self.timer2.timeout.connect(self.updateLabelOdom)
+        self.timer2.start(500) #repeat every 1 sec          
 
     #creates QComboBox to select which robot controled
     def createSelector(self):
@@ -237,7 +249,8 @@ class myWidget( QWidget ):
 
     #update odometry position label
     def updateLabelOdom(self):
-        self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom,self.y_odom,self.yaw_odom))
+        #rospy.loginfo(self.currentJackal)
+        self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom[self.currentJackal],self.y_odom[self.currentJackal],self.yaw_odom[self.currentJackal]))
 
     #update current selected jackal from QComboBox
     def updateJackal(self):
@@ -256,17 +269,18 @@ class myWidget( QWidget ):
     #get odometry data from current jackal
     def getOdom(self,msg):
         #get odomoetry data for jackal
-        self.x_odom = msg.pose.pose.position.x
-        self.y_odom = msg.pose.pose.position.y
+        rospy.loginfo(msg)
+        rospy.loginfo(self.w-1)
+        self.x_odom[self.w-1] = msg.pose.pose.position.x
+        self.y_odom[self.w-1] = msg.pose.pose.position.y
+        #rospy.loginfo(msg)
         orientation_q = msg.pose.pose.orientation
         orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
-        (roll_odom,pitch_odom,self.yaw_odom) = euler_from_quaternion(orientation_list)    
-        self.updateLabelOdom()   
-
+        (roll_odom,pitch_odom,self.yaw_odom[self.w-1]) = euler_from_quaternion(orientation_list)    
 
     #publishing forward velocity command
     def moveForward(self):
-        self.updateMap()
+        #self.updateMap()
         command = Twist()
         command.linear.x = self.lin
         self.pub_vel.publish(command)
@@ -333,12 +347,18 @@ class myWidget( QWidget ):
         self.roll = numpy.zeros(self.num_jackals,dtype=float) 
         self.pitch = numpy.zeros(self.num_jackals,dtype=float)
         self.yaw = numpy.zeros(self.num_jackals,dtype=float)
-        for i in range(1, self.num_jackals+1):
-            self.x[i-1] = (msg.pose[i]).position.x
-            self.y[i-1] = (msg.pose[i]).position.y
-            orientation_q = (msg.pose[i]).orientation
+        self.x_odom = numpy.zeros(self.num_jackals,dtype=float)
+        self.y_odom = numpy.zeros(self.num_jackals,dtype=float)
+        self.yaw_odom = numpy.zeros(self.num_jackals,dtype=float)
+        for self.w in range(1, self.num_jackals+1):
+            self.x[self.w-1] = (msg.pose[self.w]).position.x
+            self.y[self.w-1] = (msg.pose[self.w]).position.y
+            orientation_q = (msg.pose[self.w]).orientation
             orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
-            (self.roll[i-1],self.pitch[i-1],self.yaw[i-1]) = euler_from_quaternion(orientation_list)
+            (self.roll[self.w-1],self.pitch[self.w-1],self.yaw[self.w-1]) = euler_from_quaternion(orientation_list)
+            #rospy.loginfo(self.jackal_names[i-1])
+            node_sub_str = self.jackal_names[self.w-1] + '/jackal_velocity_controller/odom'
+            rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
         #rospy.loginfo(self.x)
         #rospy.loginfo("Current Jackal: {}".format(self.currentJackal))
 
