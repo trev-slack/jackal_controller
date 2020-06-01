@@ -2,6 +2,7 @@
 import rospy
 import rviz
 import math
+import time
 import numpy
 from tf.transformations import euler_from_quaternion
 from nav_msgs.msg import Odometry
@@ -41,8 +42,9 @@ class myWidget( QWidget ):
         self.x_odom = numpy.zeros(self.num_jackals,dtype=float)
         self.y_odom = numpy.zeros(self.num_jackals,dtype=float)
         self.yaw_odom = numpy.zeros(self.num_jackals,dtype=float)
-        self.map_x = [0]
-        self.map_y = [0]
+        self.map_counter = 0
+        self.map_x = numpy.zeros(50,dtype=float)
+        self.map_y = numpy.zeros(50,dtype=float)
         #label formating variables
         self.old_vel = 1
         self.old_ang = 1
@@ -58,17 +60,10 @@ class myWidget( QWidget ):
         self.createOdomLabels()
         #create jackal selector
         self.createSelector()
-        #connect all controls
-        self.connectControls()
-'''
-        self.graphView = QGraphicsView(self)
-        self.graphScene = QGraphicsScene(self)
-        self.graphPixmap = self.graphScene.addPixmap(QPixmap())
-        self.graphView.setScene(self.graphScene); 
-'''
-
         #create dynamic map
         self.createMap()
+        #connect all controls
+        self.connectControls()
         #create pyqt layout
         self.createLayout()
 
@@ -95,40 +90,34 @@ class myWidget( QWidget ):
         side_layout.addWidget(self.robotSelector)
         #main window layout
         main_layout = QHBoxLayout()
-        main_layout.addWidget(dynamic_canvas)
+        main_layout.addWidget(self.dynamic_canvas)
         main_layout.addLayout(side_layout)
         self.setLayout( main_layout )
 
     #creates position map
     def createMap(self):
-        self.dynamic_canvas = FigureCanvas(Figure(figsize=(5,3)))
-
+        self.dynamic_canvas = FigureCanvas(Figure(figsize=(5,5)))
         self._dynamic_ax = self.dynamic_canvas.figure.subplots()
-        self._dynamic_timer = self.dynamic_canvas.new_timer(100, [(self.updateMap,(),{})])
-        self._dynamic_timer.start()
-'''
-        sp = SubplotParams(left=0.,bottom=0.,right=1.,top=1.); 
-        self.fig = Figure(subplotpars=sp); 
-        self.canvas = FigureCanvas(self.fig); 
-        self.ax = self.fig.add_subplot(111); 
-        self.ax.scatter(self.x,self.y)
-        self.ax.set_xlabel("x [m]")
-        self.ax.set_ylabel("y [m]")
-        self.ax.set_title("Jackal Map")
-        self.ax.grid(True)
-        self.ax.set_xlim([-20, 20])
-        self.ax.set_ylim([-20, 20])
-        self.canvas.draw(); 
-        size = self.canvas.size(); 
-        width,height = size.width(),size.height(); 
-        self.im = QImage(self.canvas.buffer_rgba(),width,height,QtGui.QImage.Format_ARGB32); 
-        self.pm = QPixmap(self.im); 
-        self.graphPixmap.setPixmap(self.pm)
-'''
+        self.map_timer = QtCore.QTimer() 
+
+    #updates map
     def updateMap(self):
+        self.map_timer.stop()
         self._dynamic_ax.clear()
-        t = np.linspace(0,10,501)
-        self._dynamic_ax.plot(t, np.sin(t + time.time()))
+        self._dynamic_ax.set_xlabel("x [m]")
+        self._dynamic_ax.set_xlim(-10, 10)
+        self._dynamic_ax.set_ylabel("y [m]")
+        self._dynamic_ax.set_ylim(-10, 10)
+        self._dynamic_ax.set_title(self.jackal_names[0] + " Map")
+        self._dynamic_ax.grid()
+        if self.setup == True:
+            if self.map_counter>=50:
+                self.map_counter = 0
+            self.map_x[self.map_counter] = self.x[self.currentJackal]
+            self.map_y[self.map_counter] = self.y[self.currentJackal]
+            self.map_counter = self.map_counter+1
+        self._dynamic_ax.plot(self.map_x[:self.map_counter],self.map_y[:self.map_counter],label = '1')
+        self._dynamic_ax.scatter(self.map_x[self.map_counter-1],self.map_y[self.map_counter-1],label='2')
         self._dynamic_ax.figure.canvas.draw()
 
     #creates QPushButtons for controls
@@ -138,11 +127,13 @@ class myWidget( QWidget ):
         self.pushButtonForwards.setObjectName("pushButtonForwards")
         self.pushButtonForwards.setText("Forwards")
         self.pushButtonForwards.setAutoRepeat(True)
+        self.pushButtonForwards.setAutoRepeatDelay(1)
         #backwards
         self.pushButtonBackwards = QtWidgets.QPushButton(self)
         self.pushButtonBackwards.setObjectName("pushButtonBackwards")
         self.pushButtonBackwards.setText("Backwards")
         self.pushButtonBackwards.setAutoRepeat(True)
+        self.pushButtonBackwards.setAutoRepeatDelay(1)
         #turn left
         self.pushButtonLeft = QtWidgets.QPushButton(self)
         self.pushButtonLeft.setObjectName("pushButtonLeft")
@@ -199,7 +190,7 @@ class myWidget( QWidget ):
         self.timer.start(500) #repeat every 1 sec    
         self.timer2 = QtCore.QTimer()
         self.timer2.timeout.connect(self.updateLabelOdom)
-        self.timer2.start(500) #repeat every 1 sec          
+        self.timer2.start(500) #repeat          
 
     #creates QComboBox to select which robot controled
     def createSelector(self):
@@ -218,7 +209,7 @@ class myWidget( QWidget ):
 
     #links signals for QT
     def connectControls(self):
-         #behavior
+        #behavior
         self.pushButtonForwards.pressed.connect(self.moveForward)
         self.pushButtonBackwards.pressed.connect(self.moveBackwards)
         self.pushButtonLeft.pressed.connect(self.moveLeft)
@@ -228,7 +219,7 @@ class myWidget( QWidget ):
         self.qdialAngspeed.sliderReleased.connect(self.updateAng)
         self.qdialAngspeed.sliderReleased.connect(self.updateLabelAng)       
         self.robotSelector.currentIndexChanged.connect(self.updateJackal)
-
+        self.map_timer.timeout.connect(self.updateMap)   
 
     #update linear speed label
     def updateLabel(self):
@@ -249,44 +240,38 @@ class myWidget( QWidget ):
 
     #update odometry position label
     def updateLabelOdom(self):
-        #rospy.loginfo(self.currentJackal)
         self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom[self.currentJackal],self.y_odom[self.currentJackal],self.yaw_odom[self.currentJackal]))
 
     #update current selected jackal from QComboBox
     def updateJackal(self):
         self.currentJackal = self.robotSelector.currentIndex()
+        self.map_x = numpy.zeros(50,dtype=float)
+        self.map_y = numpy.zeros(50,dtype=float)
+        self.map_counter = 0
         nodeStr = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
         node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
         rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
-        rospy.loginfo("Subscribed to: {}".format(self.jackal_names[self.currentJackal]))
-
-
-        #node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
-        #rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
-        #rospy.loginfo("Index changed to: {}".format(self.currentJackal))
 
     #get odometry data from current jackal
     def getOdom(self,msg):
         #get odomoetry data for jackal
-        rospy.loginfo(msg)
-        rospy.loginfo(self.w-1)
         self.x_odom[self.w-1] = msg.pose.pose.position.x
         self.y_odom[self.w-1] = msg.pose.pose.position.y
-        #rospy.loginfo(msg)
         orientation_q = msg.pose.pose.orientation
         orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
         (roll_odom,pitch_odom,self.yaw_odom[self.w-1]) = euler_from_quaternion(orientation_list)    
 
     #publishing forward velocity command
     def moveForward(self):
-        #self.updateMap()
+        self.map_timer.start(200) 
         command = Twist()
         command.linear.x = self.lin
         self.pub_vel.publish(command)
 
     #publish backwards velocity command
     def moveBackwards(self):
+        self.map_timer.start(200)         
         command = Twist()
         command.linear.x = self.lin*-1
         self.pub_vel.publish(command)
@@ -311,32 +296,11 @@ class myWidget( QWidget ):
     def updateAng(self):
         self.ang = self.qdialAngspeed.value()
 
-
-    #manage RViz View
-    def onTopButtonClick( self ):
-        self.switchToView( "Top View" );
-        
-    #manage RViz side view
-    def onSideButtonClick( self ):
-        self.switchToView( "Side View" );
-        
-
-    #get views from config
-    def switchToView( self, view_name ):
-        view_man = self.manager.getViewManager()
-        for i in range( view_man.getNumViews() ):
-            if view_man.getViewAt( i ).getName() == view_name:
-                view_man.setCurrentFrom( view_man.getViewAt( i ))
-                return
-        print( "Did not find view named %s." % view_name )
-
-
     #ROS Gazebo subscriber function
     def findLoc(self, msg):
         object_names = msg.name
         self.jackal_names = object_names[self.otherObjects:]
         self.num_jackals = len(self.jackal_names)
-        #rospy.loginfo("Number jackals: {}".format(self.num_jackals))
         #set up combobox
         if not self.setup:
             self.updateSelector()
@@ -356,11 +320,9 @@ class myWidget( QWidget ):
             orientation_q = (msg.pose[self.w]).orientation
             orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
             (self.roll[self.w-1],self.pitch[self.w-1],self.yaw[self.w-1]) = euler_from_quaternion(orientation_list)
-            #rospy.loginfo(self.jackal_names[i-1])
             node_sub_str = self.jackal_names[self.w-1] + '/jackal_velocity_controller/odom'
             rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
-        #rospy.loginfo(self.x)
-        #rospy.loginfo("Current Jackal: {}".format(self.currentJackal))
+
 
 
 if __name__ == '__main__':
