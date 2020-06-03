@@ -29,6 +29,9 @@ class myWidget( QWidget ):
         self.currentJackal = 0
         self.jackal_names = ["Disconnected"]
         self.setup = False
+        #start locations of jackal in global coordinates
+        self.jackal_spawn_x = [0,2,-2]
+        self.jackal_spawn_y = [0,0,0]
         # number of non jackal objects
         self.otherObjects = 1
         #intial linear and angular speed
@@ -43,11 +46,12 @@ class myWidget( QWidget ):
         self.x_odom = numpy.zeros(self.num_jackals+1,dtype=float)
         self.y_odom = numpy.zeros(self.num_jackals+1,dtype=float)
         self.yaw_odom = numpy.zeros(self.num_jackals+1,dtype=float)
-        self.colors = numpy.zeros(self.num_jackals+1,dtype=str)
         self.subbed = False
         self.map_counter = 0
         self.map_x = numpy.zeros(50,dtype=float)
         self.map_y = numpy.zeros(50,dtype=float)
+        self.map_x_odom = numpy.zeros(50,dtype=float)
+        self.map_y_odom = numpy.zeros(50,dtype=float)
         #label formating variables
         self.old_vel = 1
         self.old_ang = 1
@@ -124,9 +128,13 @@ class myWidget( QWidget ):
                 self.map_counter = 0
             self.map_x[self.map_counter] = self.x[self.currentJackal]
             self.map_y[self.map_counter] = self.y[self.currentJackal]
+            self.map_x_odom[self.map_counter] = self.x_odom[self.currentJackal]
+            self.map_y_odom[self.map_counter] = self.y_odom[self.currentJackal]
             self.map_counter = self.map_counter+1
         self._dynamic_ax.plot(self.map_x[:self.map_counter],self.map_y[:self.map_counter],label = '1')
+        self._dynamic_ax.plot(self.map_x_odom[:self.map_counter],self.map_y_odom[:self.map_counter],label = '3')
         self._dynamic_ax.scatter(self.map_x[self.map_counter-1],self.map_y[self.map_counter-1],label='2')
+        self._dynamic_ax.scatter(self.map_x_odom[self.map_counter-1],self.map_y_odom[self.map_counter-1],label='4')
         self._dynamic_ax.figure.canvas.draw()
 
     #creates QPushButtons for controls
@@ -214,7 +222,7 @@ class myWidget( QWidget ):
         nodeStr = self.jackal_names[0] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
         node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
-        rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
+        self.odom_sub = rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
 
     #links signals for QT
     def connectControls(self):
@@ -254,22 +262,19 @@ class myWidget( QWidget ):
 
     #update current selected jackal from QComboBox
     def updateJackal(self):
+        self.odom_sub.unregister()
         self.currentJackal = self.robotSelector.currentIndex()
         self.map_x = numpy.zeros(50,dtype=float)
         self.map_y = numpy.zeros(50,dtype=float)
+        self.map_x_odom = numpy.zeros(50,dtype=float)
+        self.map_y_odom = numpy.zeros(50,dtype=float)
         self.map_counter = 0
         nodeStr = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
         node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
+        self.odom_sub = rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
         self.updateMap()
-        '''
-        if self.subbed == True:
-            print("unsub")
-            self.odom_sub.unregister()
-            self.subbed = False
-        self.subbed = True
-        self.odom_sub = odom_sub = rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
-        '''
+
 
     #get odometry data from current jackal
     def getOdom(self,msg):
@@ -328,28 +333,17 @@ class myWidget( QWidget ):
             self.roll = numpy.zeros(self.num_jackals,dtype=float) 
             self.pitch = numpy.zeros(self.num_jackals,dtype=float)
             self.yaw = numpy.zeros(self.num_jackals,dtype=float)
-            self.colors = numpy.zeros(self.num_jackals,dtype=str)
             self.x_odom = numpy.zeros(self.num_jackals,dtype=float)
             self.y_odom = numpy.zeros(self.num_jackals,dtype=float)
             self.yaw_odom = numpy.zeros(self.num_jackals,dtype=float)
             self.setup = True
         #get x,y location and angles
         for self.w in range(1, self.num_jackals+1):
-            self.x[self.w-1] = (msg.pose[self.w]).position.x
-            self.y[self.w-1] = (msg.pose[self.w]).position.y
+            self.x[self.w-1] = (msg.pose[self.w]).position.x -self.jackal_spawn_x[self.w-1]
+            self.y[self.w-1] = (msg.pose[self.w]).position.y -self.jackal_spawn_y[self.w-1]
             orientation_q = (msg.pose[self.w]).orientation
             orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
             (self.roll[self.w-1],self.pitch[self.w-1],self.yaw[self.w-1]) = euler_from_quaternion(orientation_list)
-'''
-            node_sub_str = self.jackal_names[self.w-1] + '/jackal_velocity_controller/odom'
-            if self.subbed == True:
-                self.odom_sub.unregister()
-                self.subbed = False
-            self.subbed = True
-            self.odom_sub = rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
-            #self.colors[self.w-1] = self.stringToColour()
-            #rospy.loginfo(self.colors)
-'''
 
 if __name__ == '__main__':
     try:
