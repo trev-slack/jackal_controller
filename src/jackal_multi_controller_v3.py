@@ -4,6 +4,7 @@ import rviz
 import math
 import time
 import numpy
+import random
 from tf.transformations import euler_from_quaternion
 from nav_msgs.msg import Odometry
 from gazebo_msgs.msg import ModelStates
@@ -34,24 +35,31 @@ class myWidget( QWidget ):
         self.lin = 1
         self.ang = 1
         #position values (size determined by number of jackals)
-        self.x = numpy.zeros(self.num_jackals,dtype=float)
-        self.y = numpy.zeros(self.num_jackals,dtype=float)
-        self.roll = numpy.zeros(self.num_jackals,dtype=float) 
-        self.pitch = numpy.zeros(self.num_jackals,dtype=float)
-        self.yaw = numpy.zeros(self.num_jackals,dtype=float)
-        self.x_odom = numpy.zeros(self.num_jackals,dtype=float)
-        self.y_odom = numpy.zeros(self.num_jackals,dtype=float)
-        self.yaw_odom = numpy.zeros(self.num_jackals,dtype=float)
+        self.x = numpy.zeros(self.num_jackals+1,dtype=float)
+        self.y = numpy.zeros(self.num_jackals+1,dtype=float)
+        self.roll = numpy.zeros(self.num_jackals+1,dtype=float) 
+        self.pitch = numpy.zeros(self.num_jackals+1,dtype=float)
+        self.yaw = numpy.zeros(self.num_jackals+1,dtype=float)
+        self.x_odom = numpy.zeros(self.num_jackals+1,dtype=float)
+        self.y_odom = numpy.zeros(self.num_jackals+1,dtype=float)
+        self.yaw_odom = numpy.zeros(self.num_jackals+1,dtype=float)
+        self.colors = numpy.zeros(self.num_jackals+1,dtype=str)
+        self.subbed = False
         self.map_counter = 0
         self.map_x = numpy.zeros(50,dtype=float)
         self.map_y = numpy.zeros(50,dtype=float)
         #label formating variables
         self.old_vel = 1
         self.old_ang = 1
-        #ROS subscriber
-        rospy.Subscriber("/gazebo/model_states", ModelStates, self.findLoc)
-        self.pub_vel = rospy.Publisher('jackal0/jackal_velocity_controller/cmd_vel',Twist, queue_size = 1)
 
+        self.controllerMain()
+
+
+    def controllerMain(self):
+        #ros subscriber
+        self.gazebo_sub = rospy.Subscriber("/gazebo/model_states", ModelStates, self.findLoc)
+        self.pub_vel = rospy.Publisher('jackal0/jackal_velocity_controller/cmd_vel',Twist, queue_size = 1)
+        #while not rospy.is_shutdown():
         #create jackal controls
         self.createPushButtons()
         #creating speed controls
@@ -66,6 +74,7 @@ class myWidget( QWidget ):
         self.connectControls()
         #create pyqt layout
         self.createLayout()
+            #rospy.spin()
 
     #creates Qt layout
     def createLayout(self):
@@ -240,6 +249,7 @@ class myWidget( QWidget ):
 
     #update odometry position label
     def updateLabelOdom(self):
+        rospy.loginfo(self.x_odom)
         self.labelOdom.setText("Odometry\nPosition: ({0:.2f}, {1:.2f}) [m]\nAngle: {2:.2f} [rad]".format(self.x_odom[self.currentJackal],self.y_odom[self.currentJackal],self.yaw_odom[self.currentJackal]))
 
     #update current selected jackal from QComboBox
@@ -251,16 +261,25 @@ class myWidget( QWidget ):
         nodeStr = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
         node_sub_str = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/odom'
-        rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
+        self.updateMap()
+        '''
+        if self.subbed == True:
+            print("unsub")
+            self.odom_sub.unregister()
+            self.subbed = False
+        self.subbed = True
+        self.odom_sub = odom_sub = rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
+        '''
 
     #get odometry data from current jackal
     def getOdom(self,msg):
         #get odomoetry data for jackal
-        self.x_odom[self.w-1] = msg.pose.pose.position.x
-        self.y_odom[self.w-1] = msg.pose.pose.position.y
+        self.x_odom[self.currentJackal] = msg.pose.pose.position.x
+        self.y_odom[self.currentJackal] = msg.pose.pose.position.y
         orientation_q = msg.pose.pose.orientation
         orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
-        (roll_odom,pitch_odom,self.yaw_odom[self.w-1]) = euler_from_quaternion(orientation_list)    
+        (roll_odom,pitch_odom,self.yaw_odom[self.currentJackal]) = euler_from_quaternion(orientation_list)   
+        #rospy.loginfo(self.x_odom) 
 
     #publishing forward velocity command
     def moveForward(self):
@@ -304,26 +323,33 @@ class myWidget( QWidget ):
         #set up combobox
         if not self.setup:
             self.updateSelector()
+            self.x = numpy.zeros(self.num_jackals,dtype=float)
+            self.y = numpy.zeros(self.num_jackals,dtype=float)
+            self.roll = numpy.zeros(self.num_jackals,dtype=float) 
+            self.pitch = numpy.zeros(self.num_jackals,dtype=float)
+            self.yaw = numpy.zeros(self.num_jackals,dtype=float)
+            self.colors = numpy.zeros(self.num_jackals,dtype=str)
+            self.x_odom = numpy.zeros(self.num_jackals,dtype=float)
+            self.y_odom = numpy.zeros(self.num_jackals,dtype=float)
+            self.yaw_odom = numpy.zeros(self.num_jackals,dtype=float)
             self.setup = True
         #get x,y location and angles
-        self.x = numpy.zeros(self.num_jackals,dtype=float)
-        self.y = numpy.zeros(self.num_jackals,dtype=float)
-        self.roll = numpy.zeros(self.num_jackals,dtype=float) 
-        self.pitch = numpy.zeros(self.num_jackals,dtype=float)
-        self.yaw = numpy.zeros(self.num_jackals,dtype=float)
-        self.x_odom = numpy.zeros(self.num_jackals,dtype=float)
-        self.y_odom = numpy.zeros(self.num_jackals,dtype=float)
-        self.yaw_odom = numpy.zeros(self.num_jackals,dtype=float)
         for self.w in range(1, self.num_jackals+1):
             self.x[self.w-1] = (msg.pose[self.w]).position.x
             self.y[self.w-1] = (msg.pose[self.w]).position.y
             orientation_q = (msg.pose[self.w]).orientation
             orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
             (self.roll[self.w-1],self.pitch[self.w-1],self.yaw[self.w-1]) = euler_from_quaternion(orientation_list)
+'''
             node_sub_str = self.jackal_names[self.w-1] + '/jackal_velocity_controller/odom'
-            rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
-
-
+            if self.subbed == True:
+                self.odom_sub.unregister()
+                self.subbed = False
+            self.subbed = True
+            self.odom_sub = rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
+            #self.colors[self.w-1] = self.stringToColour()
+            #rospy.loginfo(self.colors)
+'''
 
 if __name__ == '__main__':
     try:
@@ -332,7 +358,8 @@ if __name__ == '__main__':
         #PyQt application
         app = QtWidgets.QApplication([])
         myviz = myWidget()
-        myviz.resize( 500, 500 )
+        myviz.resize( 1500, 750 )
+        myviz.setWindowTitle("Jackal Controller")
         #display window
         myviz.show()
         app.exec_()
