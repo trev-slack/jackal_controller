@@ -12,8 +12,8 @@ from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Vector3
 
 from PyQt5 import QtGui, QtCore, QtWidgets
-from PyQt5.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QGridLayout, QComboBox, QGraphicsView, QGraphicsScene
-from PyQt5.QtGui import QImage, QPixmap;
+from PyQt5.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QFormLayout, QHBoxLayout, QWidget, QGridLayout, QComboBox, QGraphicsView, QGraphicsScene, QLineEdit
+from PyQt5.QtGui import QImage, QPixmap, QIntValidator
 from PyQt5.QtCore import QSize, Qt, pyqtSlot, pyqtSignal, QTimer
 
 from matplotlib.backends.backend_qt5agg import FigureCanvas
@@ -47,6 +47,9 @@ class myWidget( QWidget ):
         #label formating variables
         self.old_vel = self.lin
         self.old_ang = self.ang
+        #initial waypoint
+        self.target = [0,0,0]
+        self.kp = 0.9
         #call main
         self.controllerMain()
 
@@ -68,6 +71,8 @@ class myWidget( QWidget ):
         self.createMap()
         #create save controls
         self.createLocationSave()
+        #create waypoint controls
+        self.createWaypointControls()
         #connect all controls
         self.connectControls()
         #create pyqt layout
@@ -94,16 +99,24 @@ class myWidget( QWidget ):
         location_layout.addWidget(self.labelOdom,1,0)
         location_layout.addWidget(self.pushButtonSave,0,1)
         location_layout.addWidget(self.pushButtonLoad,1,1)
+        #waypoint controls
+        waypoint_layout = QFormLayout()
+        waypoint_layout.addRow("X:",self.wayXLine)
+        waypoint_layout.addRow("Y:",self.wayYLine)
+        waypoint_layout.addWidget(self.pushButtonCommit)
         #side controls
         side_layout = QVBoxLayout()
         side_layout.addLayout(control_box)
         side_layout.addLayout(speed_box)
+        side_layout.addLayout(waypoint_layout)
         side_layout.addLayout(location_layout)
         side_layout.addWidget(self.robotSelector)
         #main window layout
         main_layout = QHBoxLayout()
         main_layout.addWidget(self.dynamic_canvas)
         main_layout.addLayout(side_layout)
+        main_layout.setStretch(0,2)
+        main_layout.setStretch(1,1)
         #commit layout
         self.setLayout( main_layout )
 
@@ -241,6 +254,22 @@ class myWidget( QWidget ):
         self.pushButtonLoad.setText("Load Location Data")        
 
 
+    def createWaypointControls(self):
+        #x waypoint line
+        self.wayXLine = QtWidgets.QLineEdit()
+        self.wayXLine.setValidator(QIntValidator())
+        self.wayXLine.setMaxLength(4)
+        #self.wayXLine.setAlignment(Qt.AlignRight)
+        #self.wayXLine.setFont(QFont("Arial",20))
+        self.wayYLine = QtWidgets.QLineEdit()
+        self.wayYLine.setValidator(QIntValidator())
+        self.wayYLine.setMaxLength(4)
+
+        self.pushButtonCommit = QtWidgets.QPushButton(self)
+        self.pushButtonCommit.setObjectName("pushButtonCommit")
+        self.pushButtonCommit.setText("Publish Waypoint")
+
+
     #links signals for QT
     def connectControls(self):
         #behavior for QT
@@ -255,6 +284,7 @@ class myWidget( QWidget ):
         self.robotSelector.currentIndexChanged.connect(self.updateJackal)
         self.pushButtonSave.pressed.connect(self.writeLocationData)
         self.pushButtonLoad.pressed.connect(self.readLocationData)
+        self.pushButtonCommit.pressed.connect(self.getTarget)
 
 
     #update linear speed label
@@ -409,6 +439,126 @@ class myWidget( QWidget ):
         if not self.setup:
             self.updateSelector()
             self.setup = True
+
+
+    #get target angle and distance
+    def getTarget(self):
+        if self.wayXLine.isModified() and self.wayYLine.isModified():
+
+            way_x = int(self.wayXLine.text())
+            way_y = int(self.wayYLine.text())
+            self.target[0:1] = [way_x,way_y] - self.gazebo_loc[self.currentJackal,0:1,-1]
+            self.target_angle = math.atan2(self.target[1],self.target[0])
+            self.target_distance = math.sqrt((way_x)**2+(way_y)**2)
+            print("Target Distance: {}".format(self.target_distance))
+            print("Target Angle: {}".format(self.target_angle))
+            while not self.rotate():
+                self.rotate()
+        else:
+            print("No valid waypoint recived")
+
+
+    #rotate to target
+    def rotate(self):
+        command = Twist()
+        rospy.loginfo("target angle={} current angle={}".format(self.target_angle,self.gazebo_loc[self.currentJackal,5,-1]))
+        #rotate jackal
+        command.linear.x = 0
+        command.angular.z = self.kp*(self.target_angle-self.gazebo_loc[self.currentJackal,5,-1])
+        self.pub_vel.publish(command)
+        #check if at target_angle
+        if self.target_angle < 0:
+            if self.target_angle - self.gazebo_loc[self.currentJackal,5,-1] >= -0.01:
+                return True
+        elif self.target_angle > 0:
+            if abs(self.target_angle - self.gazebo_loc[self.currentJackal,5,-1]) <= 0.01:
+                return True
+        elif self.target_angle == 0:
+            if self.target_angle + abs(self.gazebo_loc[self.currentJackal,5,-1]) <= 0.01:
+                return True
+        else:
+            return False
+
+
+    #move to target
+    def move(self):
+        self.old_distance = self.target_distance
+        #get local distance
+        way_x_dist = self.way_x_rel + self.x_curr
+        way_y_dist = self.way_y_rel + self.y_curr
+        self.target_distance = math.sqrt((way_x_dist-self.x)**2+(way_y_dist-self.y)**2)
+        command = Twist()
+        rospy.loginfo("distance to target={}".format(self.target_distance))
+        #move jackal, velocity scaled by distance
+        command.linear.x = math.log(self.target_distance+1)
+        self.pub_vel.publish(command)
+        #check if at waypoint
+        if self.target_distance > self.old_distance:
+            self.check = self.check+1
+        if self.target_distance < 0.01 or self.check >= 5:
+            return True
+        else: 
+            return False
+
+    def moveToWaypoint(self):
+        #subscribe and get odometry location and waypoint data
+        rospy.Subscriber("/odometry/filtered", Odometry, self.findLoc)
+        rospy.Subscriber('/Waypoint', Waypoint, self.getAngle)
+
+        #self.gps = rospy.wait_for_message('/GPS',GPS,timeout=5)
+
+        #create publisher for cmd_vel to move jackal
+        self.pub_vel = rospy.Publisher('cmd_vel',Twist, queue_size = 1)
+        rate = rospy.Rate(60)
+        #text formating
+        flag_format = False
+        flag2 = False
+        flag3 = False
+        flag_rotate = False
+        #loop to rotate and move
+        while not rospy.is_shutdown():
+            #check if have odometry data
+            if self.yaw == None:
+                if flag3 == False:
+                    flag3 = True
+                    print("Waiting for Odometry.")
+                continue
+            #check if have waypoint data
+            if self.way_x == None:
+                if flag2 == False:
+                    rospy.loginfo("Approximate Global (x,y)=({},{})".format(self.x,self.y))
+                    print("Waiting for Waypoint.")
+                    flag2 = True
+                continue
+            #check if have a new waypoint
+            if (self.old_way_x == self.way_x and self.old_way_y == self.way_y):
+                if flag_format == False:
+                    print("Waiting for new waypoint.\n")
+                    flag_format = True
+                continue
+            #call rotate function
+            flag_rotate = self.rotate()
+            #if done rotating
+            if flag_rotate:
+                flag_move = False
+                self.x_curr = self.x
+                self.y_curr = self.y
+                #call move function
+                self.check = 0
+                while not flag_move and not rospy.is_shutdown():
+                    flag_move = self.move()
+                #now at waypoint
+                print("At Waypoint.\n")
+                rospy.loginfo("Approximate Global (x,y)=({},{})".format(self.x,self.y))
+                self.old_way_x = self.way_x
+                self.old_way_y = self.way_y
+                #recall main
+                self.main()
+            rate.sleep()
+        rospy.spin()        
+
+
+
 
 
 
