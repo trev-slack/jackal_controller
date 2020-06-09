@@ -66,6 +66,8 @@ class myWidget( QWidget ):
         self.createSelector()
         #create dynamic map
         self.createMap()
+        #create save controls
+        self.createLocationSave()
         #connect all controls
         self.connectControls()
         #create pyqt layout
@@ -86,12 +88,17 @@ class myWidget( QWidget ):
         speed_box.addWidget(self.qdialAngspeed,1,1)
         speed_box.addWidget(self.labelVel,0,0)
         speed_box.addWidget(self.labelAngVel,0,1)
+        #location section
+        location_layout = QGridLayout()
+        location_layout.addWidget(self.labelPosition,0,0)
+        location_layout.addWidget(self.labelOdom,1,0)
+        location_layout.addWidget(self.pushButtonSave,0,1)
+        location_layout.addWidget(self.pushButtonLoad,1,1)
         #side controls
         side_layout = QVBoxLayout()
         side_layout.addLayout(control_box)
         side_layout.addLayout(speed_box)
-        side_layout.addWidget(self.labelPosition)
-        side_layout.addWidget(self.labelOdom)
+        side_layout.addLayout(location_layout)
         side_layout.addWidget(self.robotSelector)
         #main window layout
         main_layout = QHBoxLayout()
@@ -222,6 +229,18 @@ class myWidget( QWidget ):
         rospy.loginfo(self.jackal_names)
 
 
+    #buttons to save and load location data
+    def createLocationSave(self):
+        #save button
+        self.pushButtonSave = QtWidgets.QPushButton(self)
+        self.pushButtonSave.setObjectName("pushButtonSave")
+        self.pushButtonSave.setText("Save Location Data")
+        #load button
+        self.pushButtonLoad = QtWidgets.QPushButton(self)
+        self.pushButtonLoad.setObjectName("pushButtonLoad")
+        self.pushButtonLoad.setText("Load Location Data")        
+
+
     #links signals for QT
     def connectControls(self):
         #behavior for QT
@@ -234,6 +253,8 @@ class myWidget( QWidget ):
         self.qdialAngspeed.sliderReleased.connect(self.updateAng)
         self.qdialAngspeed.sliderReleased.connect(self.updateLabelAng)       
         self.robotSelector.currentIndexChanged.connect(self.updateJackal)
+        self.pushButtonSave.pressed.connect(self.writeLocationData)
+        self.pushButtonLoad.pressed.connect(self.readLocationData)
 
 
     #update linear speed label
@@ -285,35 +306,32 @@ class myWidget( QWidget ):
         #buffer is full
         if numpy.count_nonzero(self.odom_buffer)==9:
             self.odom_loc = numpy.dstack((self.odom_loc,self.odom_buffer))
-
-
-
-
-            # Write the array to disk
-            with open('test.txt', 'w') as outfile:
-                # I'm writing a header here just for the sake of readability
-                # Any line starting with "#" will be ignored by numpy.loadtxt
-                outfile.write('# Array shape: {0}\n'.format(self.odom_loc.shape))
-
-                # Iterating through a ndimensional array produces slices along
-                # the last axis. This is equivalent to data[i,:,:] in this case
-                for data_slice in self.odom_loc:
-
-                    # The formatting string indicates that I'm writing out
-                    # the values in left-justified columns 7 characters in width
-                    # with 2 decimal places.  
-                    numpy.savetxt(outfile, data_slice, fmt='%-7.2f')
-
-                    # Writing out a break to indicate different slices...
-                    outfile.write('# New slice\n')
-
-
-
-
-
-            #numpy.savetxt(outfile, self.odom_loc)
             self.odom_buffer = numpy.zeros((self.num_jackals,3))
         self.odom_buffer[self.jackal_names.index(name)] = row
+
+
+    # Write the array to disk
+    def writeLocationData(self):
+        with open('odom_data.txt', 'w') as outfile:
+            #header with shape
+            sh = self.odom_loc.shape
+            outfile.write('Odom Array shape {0} {1} {2}\n'.format(sh[0],sh[1],sh[2]))
+            #itterate equivalent to data[:,:,i]
+            for data_slice in self.odom_loc[:][:]:
+                #write to file, round to 2 decimal places
+                numpy.savetxt(outfile, data_slice, fmt='%-7.2f')
+                #break between slices
+                outfile.write('# New slice\n')    
+
+
+    #read location data in from disk
+    def readLocationData(self):
+        with open('odom_data.txt') as infile:
+            array_shape_line = infile.readline()
+        array_shape = [int(s) for s in array_shape_line.split() if s.isdigit()] 
+        self.odom_loc = numpy.loadtxt('odom_data.txt',skiprows=1)
+        # original shape of the array
+        self.odom_loc = self.odom_loc.reshape((array_shape[0],array_shape[1],array_shape[2]))       
 
 
     #publishing forward velocity command
