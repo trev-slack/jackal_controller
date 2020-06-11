@@ -5,15 +5,17 @@ import math
 import time
 import numpy
 import random
-from tf.transformations import euler_from_quaternion
+import actionlib
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
 from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Vector3
+from move_base_msgs.msg import *
 
 from PyQt5 import QtGui, QtCore, QtWidgets
 from PyQt5.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QFormLayout, QHBoxLayout, QWidget, QGridLayout, QComboBox, QGraphicsView, QGraphicsScene, QLineEdit
-from PyQt5.QtGui import QImage, QPixmap, QIntValidator
+from PyQt5.QtGui import QImage, QPixmap, QDoubleValidator
 from PyQt5.QtCore import QSize, Qt, pyqtSlot, pyqtSignal, QTimer
 
 from matplotlib.backends.backend_qt5agg import FigureCanvas
@@ -32,8 +34,9 @@ class myWidget( QWidget ):
         self.jackal_names = ["Disconnected"]
         self.setup = False
         #start locations of jackal in global coordinates
-        self.jackal_spawn_x = [0,2,-2]
-        self.jackal_spawn_y = [0,0,0]
+        self.TARS_spawn = [-2,0]
+        self.CASE_spawn = [0,0]
+        self.KIPP_spawn = [2,0]
         # number of non jackal objects (ex: 1 ground plane)
         self.otherObjects = 1
         #intial linear and angular speed
@@ -103,6 +106,7 @@ class myWidget( QWidget ):
         waypoint_layout = QFormLayout()
         waypoint_layout.addRow("X:",self.wayXLine)
         waypoint_layout.addRow("Y:",self.wayYLine)
+        waypoint_layout.addRow("Z:",self.wayZLine)
         waypoint_layout.addWidget(self.pushButtonCommit)
         #side controls
         side_layout = QVBoxLayout()
@@ -137,14 +141,15 @@ class myWidget( QWidget ):
         self._dynamic_ax.set_ylim(-10, 10)
         self._dynamic_ax.set_title(self.jackal_names[self.currentJackal] + " Map")
         self._dynamic_ax.grid()
+        self._dynamic_ax.legend(loc='upper left')
         #plot trace
         ##print(self.odom_loc)
         #print("==========")
-        self._dynamic_ax.plot(self.gazebo_loc[self.currentJackal,0,:],self.gazebo_loc[self.currentJackal,1,:],label = '1')
-        self._dynamic_ax.plot(self.odom_loc[self.currentJackal,0,:],self.odom_loc[self.currentJackal,1,:],label = '3')
+        self._dynamic_ax.plot(self.gazebo_loc[self.currentJackal,0,:],self.gazebo_loc[self.currentJackal,1,:],label = 'Past Gazebo')
+        self._dynamic_ax.plot(self.odom_loc[self.currentJackal,0,:],self.odom_loc[self.currentJackal,1,:],label = 'Past Odometry')
         #plot current position
-        self._dynamic_ax.scatter(self.gazebo_loc[self.currentJackal,0,-1],self.gazebo_loc[self.currentJackal,1,-1],label='2')
-        self._dynamic_ax.scatter(self.odom_loc[self.currentJackal,0,-1],self.odom_loc[self.currentJackal,1,-1],label='4')
+        self._dynamic_ax.scatter(self.gazebo_loc[self.currentJackal,0,-1],self.gazebo_loc[self.currentJackal,1,-1],label='Current Gazebo')
+        self._dynamic_ax.scatter(self.odom_loc[self.currentJackal,0,-1],self.odom_loc[self.currentJackal,1,-1],label='Current Odometry')
         self._dynamic_ax.figure.canvas.draw()
 
 
@@ -257,13 +262,17 @@ class myWidget( QWidget ):
     def createWaypointControls(self):
         #x waypoint line
         self.wayXLine = QtWidgets.QLineEdit()
-        self.wayXLine.setValidator(QIntValidator())
-        self.wayXLine.setMaxLength(4)
+        self.wayXLine.setValidator(QDoubleValidator())
+        self.wayXLine.setMaxLength(6)
         #self.wayXLine.setAlignment(Qt.AlignRight)
         #self.wayXLine.setFont(QFont("Arial",20))
         self.wayYLine = QtWidgets.QLineEdit()
-        self.wayYLine.setValidator(QIntValidator())
-        self.wayYLine.setMaxLength(4)
+        self.wayYLine.setValidator(QDoubleValidator())
+        self.wayYLine.setMaxLength(6)
+
+        self.wayZLine = QtWidgets.QLineEdit()
+        self.wayZLine.setValidator(QDoubleValidator())
+        self.wayZLine.setMaxLength(6)
 
         self.pushButtonCommit = QtWidgets.QPushButton(self)
         self.pushButtonCommit.setObjectName("pushButtonCommit")
@@ -362,6 +371,7 @@ class myWidget( QWidget ):
         self.odom_loc = numpy.loadtxt('odom_data.txt',skiprows=1)
         # original shape of the array
         self.odom_loc = self.odom_loc.reshape((array_shape[0],array_shape[1],array_shape[2]))       
+        self.updateMap()
 
 
     #publishing forward velocity command
@@ -422,8 +432,16 @@ class myWidget( QWidget ):
         #get x,y location and angles
         for w in range(0, self.num_jackals):
             #get gazebo locations, subtracting of starting position to get in local coords
-            x = (msg.pose[w+1]).position.x + self.jackal_spawn_x[w]
-            y = (msg.pose[w+1]).position.y + self.jackal_spawn_y[w]
+            if self.jackal_names[w] == 'TARS':
+                spawn = self.TARS_spawn
+            elif self.jackal_names[w] == 'CASE':
+                spawn = self.CASE_spawn
+            elif self.jackal_names[w] == 'KIPP':
+                spawn = self.KIPP_spawn
+            else:
+                spawn = [0,0]
+            x = (msg.pose[w+1]).position.x - spawn[0]
+            y = (msg.pose[w+1]).position.y - spawn[1]
             z = (msg.pose[w+1]).position.z
             orientation_q = (msg.pose[w+1]).orientation
             orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
@@ -443,123 +461,36 @@ class myWidget( QWidget ):
 
     #get target angle and distance
     def getTarget(self):
-        if self.wayXLine.isModified() and self.wayYLine.isModified():
+        self.flag_result = 0
+        x = float(self.wayXLine.text())
+        y = float(self.wayYLine.text())
+        [qx,qy,w,z]=quaternion_from_euler(0,0,float(self.wayZLine.text()))
+        nodeStr = self.jackal_names[self.currentJackal] + '/move_base'
+        sac = actionlib.SimpleActionClient(nodeStr, MoveBaseAction )
+        #goal
+        goal = MoveBaseGoal()
+        goal.target_pose.pose.position.x = x
+        goal.target_pose.pose.position.y = y
+        goal.target_pose.pose.orientation.w = w
+        goal.target_pose.pose.orientation.z = z
+        goal.target_pose.header.frame_id = 'map'
+        goal.target_pose.header.stamp = rospy.Time.now()
+        #start listner
+        sac.wait_for_server()
 
-            way_x = int(self.wayXLine.text())
-            way_y = int(self.wayYLine.text())
-            self.target[0:1] = [way_x,way_y] - self.gazebo_loc[self.currentJackal,0:1,-1]
-            self.target_angle = math.atan2(self.target[1],self.target[0])
-            self.target_distance = math.sqrt((way_x)**2+(way_y)**2)
-            print("Target Distance: {}".format(self.target_distance))
-            print("Target Angle: {}".format(self.target_angle))
-            while not self.rotate():
-                self.rotate()
-        else:
-            print("No valid waypoint recived")
-
-
-    #rotate to target
-    def rotate(self):
-        command = Twist()
-        rospy.loginfo("target angle={} current angle={}".format(self.target_angle,self.gazebo_loc[self.currentJackal,5,-1]))
-        #rotate jackal
-        command.linear.x = 0
-        command.angular.z = self.kp*(self.target_angle-self.gazebo_loc[self.currentJackal,5,-1])
-        self.pub_vel.publish(command)
-        #check if at target_angle
-        if self.target_angle < 0:
-            if self.target_angle - self.gazebo_loc[self.currentJackal,5,-1] >= -0.01:
-                return True
-        elif self.target_angle > 0:
-            if abs(self.target_angle - self.gazebo_loc[self.currentJackal,5,-1]) <= 0.01:
-                return True
-        elif self.target_angle == 0:
-            if self.target_angle + abs(self.gazebo_loc[self.currentJackal,5,-1]) <= 0.01:
-                return True
-        else:
-            return False
+        #send goal
+        sac.send_goal(goal)
+        print "Sending goal:",x,y,w,z
+        #nodeStr2 = nodeStr + '/result'
+        #rospy.Subscriber(nodeStr2,MoveBaseActionResult,self.resultChecker)
+        while sac.get_result()==None:
+            self.updateMap()
 
 
-    #move to target
-    def move(self):
-        self.old_distance = self.target_distance
-        #get local distance
-        way_x_dist = self.way_x_rel + self.x_curr
-        way_y_dist = self.way_y_rel + self.y_curr
-        self.target_distance = math.sqrt((way_x_dist-self.x)**2+(way_y_dist-self.y)**2)
-        command = Twist()
-        rospy.loginfo("distance to target={}".format(self.target_distance))
-        #move jackal, velocity scaled by distance
-        command.linear.x = math.log(self.target_distance+1)
-        self.pub_vel.publish(command)
-        #check if at waypoint
-        if self.target_distance > self.old_distance:
-            self.check = self.check+1
-        if self.target_distance < 0.01 or self.check >= 5:
-            return True
-        else: 
-            return False
-
-    def moveToWaypoint(self):
-        #subscribe and get odometry location and waypoint data
-        rospy.Subscriber("/odometry/filtered", Odometry, self.findLoc)
-        rospy.Subscriber('/Waypoint', Waypoint, self.getAngle)
-
-        #self.gps = rospy.wait_for_message('/GPS',GPS,timeout=5)
-
-        #create publisher for cmd_vel to move jackal
-        self.pub_vel = rospy.Publisher('cmd_vel',Twist, queue_size = 1)
-        rate = rospy.Rate(60)
-        #text formating
-        flag_format = False
-        flag2 = False
-        flag3 = False
-        flag_rotate = False
-        #loop to rotate and move
-        while not rospy.is_shutdown():
-            #check if have odometry data
-            if self.yaw == None:
-                if flag3 == False:
-                    flag3 = True
-                    print("Waiting for Odometry.")
-                continue
-            #check if have waypoint data
-            if self.way_x == None:
-                if flag2 == False:
-                    rospy.loginfo("Approximate Global (x,y)=({},{})".format(self.x,self.y))
-                    print("Waiting for Waypoint.")
-                    flag2 = True
-                continue
-            #check if have a new waypoint
-            if (self.old_way_x == self.way_x and self.old_way_y == self.way_y):
-                if flag_format == False:
-                    print("Waiting for new waypoint.\n")
-                    flag_format = True
-                continue
-            #call rotate function
-            flag_rotate = self.rotate()
-            #if done rotating
-            if flag_rotate:
-                flag_move = False
-                self.x_curr = self.x
-                self.y_curr = self.y
-                #call move function
-                self.check = 0
-                while not flag_move and not rospy.is_shutdown():
-                    flag_move = self.move()
-                #now at waypoint
-                print("At Waypoint.\n")
-                rospy.loginfo("Approximate Global (x,y)=({},{})".format(self.x,self.y))
-                self.old_way_x = self.way_x
-                self.old_way_y = self.way_y
-                #recall main
-                self.main()
-            rate.sleep()
-        rospy.spin()        
-
-
-
-
+    #flag when finished moving
+    def resultChecker(self,msg):
+        self.flag_result = 1
+        print("here")
 
 
 if __name__ == '__main__':
