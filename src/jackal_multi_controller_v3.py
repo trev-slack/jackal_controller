@@ -242,7 +242,7 @@ class myWidget( QWidget ):
         nodeStr = self.jackal_names[0] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
         for i in range(0, self.num_jackals):
-            node_sub_str = self.jackal_names[i] + '/jackal_velocity_controller/odom'
+            node_sub_str = self.jackal_names[i] + '/odometry/local_filtered'
             self.odom_sub = rospy.Subscriber(node_sub_str, Odometry, self.getOdom)
         rospy.loginfo(self.jackal_names)
 
