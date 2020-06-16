@@ -6,6 +6,7 @@ import time
 import numpy
 import random
 import actionlib
+import xlrd
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
 from gazebo_msgs.msg import ModelStates
@@ -47,6 +48,7 @@ class myWidget( QWidget ):
         self.odom_loc = numpy.zeros((self.num_jackals,3,1))
         self.odom_buffer = numpy.zeros((self.num_jackals,3))
         self.subbed = False
+        self.firstodom = [True,True,True]
         #label formating variables
         self.old_vel = self.lin
         self.old_ang = self.ang
@@ -106,8 +108,9 @@ class myWidget( QWidget ):
         waypoint_layout = QFormLayout()
         waypoint_layout.addRow("X:",self.wayXLine)
         waypoint_layout.addRow("Y:",self.wayYLine)
-        waypoint_layout.addRow("Z:",self.wayZLine)
+        waypoint_layout.addRow("Theta: ",self.wayZLine)
         waypoint_layout.addWidget(self.pushButtonCommit)
+        waypoint_layout.addWidget(self.pushButtonCue)
         #side controls
         side_layout = QVBoxLayout()
         side_layout.addLayout(control_box)
@@ -142,6 +145,23 @@ class myWidget( QWidget ):
         self._dynamic_ax.set_title(self.jackal_names[self.currentJackal] + " Map")
         self._dynamic_ax.grid()
         self._dynamic_ax.legend(loc='upper left')
+
+        major_ticks = numpy.arange(-10, 10, 1)
+        minor_ticks = numpy.arange(-10, 10, 0.5)
+
+        self._dynamic_ax.set_xticks(major_ticks)
+        self._dynamic_ax.set_xticks(minor_ticks, minor=True)
+        self._dynamic_ax.set_yticks(major_ticks)
+        self._dynamic_ax.set_yticks(minor_ticks, minor=True)
+
+        # And a corresponding grid
+        self._dynamic_ax.grid(which='both')
+
+        # Or if you want different settings for the grids:
+        self._dynamic_ax.grid(which='minor', alpha=0.2)
+        self._dynamic_ax.grid(which='major', alpha=0.5)
+
+
         #plot trace
         ##print(self.odom_loc)
         #print("==========")
@@ -278,6 +298,9 @@ class myWidget( QWidget ):
         self.pushButtonCommit.setObjectName("pushButtonCommit")
         self.pushButtonCommit.setText("Publish Waypoint")
 
+        self.pushButtonCue = QtWidgets.QPushButton(self)
+        self.pushButtonCue.setObjectName("pushButtonCue")
+        self.pushButtonCue.setText("Read Waypoints From File")
 
     #links signals for QT
     def connectControls(self):
@@ -293,7 +316,8 @@ class myWidget( QWidget ):
         self.robotSelector.currentIndexChanged.connect(self.updateJackal)
         self.pushButtonSave.pressed.connect(self.writeLocationData)
         self.pushButtonLoad.pressed.connect(self.readLocationData)
-        self.pushButtonCommit.pressed.connect(self.getTarget)
+        self.pushButtonCommit.clicked.connect(self.getTarget)
+        self.pushButtonCue.clicked.connect(self.getWaypoints)
 
 
     #update linear speed label
@@ -327,6 +351,8 @@ class myWidget( QWidget ):
         self.currentJackal = self.robotSelector.currentIndex()
         nodeStr = self.jackal_names[self.currentJackal] + '/jackal_velocity_controller/cmd_vel'
         self.pub_vel = rospy.Publisher(nodeStr,Twist, queue_size = 1)
+        nodeStr2 = self.jackal_names[self.currentJackal] + '/move_base'
+        self.sac = actionlib.SimpleActionClient(nodeStr2, MoveBaseAction )
         self.updateMap()
 
 
@@ -344,6 +370,11 @@ class myWidget( QWidget ):
         row = [x,y,yaw]
         #buffer is full
         if numpy.count_nonzero(self.odom_buffer)==9:
+            #if first odom data
+            # if self.firstodom[self.currentJackal] == True:
+            #     self.odom_loc = self.odom_buffer
+            #     self.firstodom[self.currentJackal] == False
+            # else:
             self.odom_loc = numpy.dstack((self.odom_loc,self.odom_buffer))
             self.odom_buffer = numpy.zeros((self.num_jackals,3))
         self.odom_buffer[self.jackal_names.index(name)] = row
@@ -461,13 +492,20 @@ class myWidget( QWidget ):
 
     #get target angle and distance
     def getTarget(self):
+        if self.jackal_names[self.currentJackal] == 'TARS':
+            spawn = self.TARS_spawn
+        elif self.jackal_names[self.currentJackal] == 'CASE':
+            spawn = self.CASE_spawn
+        elif self.jackal_names[self.currentJackal] == 'KIPP':
+            spawn = self.KIPP_spawn
+        else:
+            spawn = [0,0]
         self.flag_result = 0
-        x = float(self.wayXLine.text())
-        y = float(self.wayYLine.text())
+        x = float(self.wayXLine.text()) + spawn[0]
+        y = float(self.wayYLine.text()) + spawn[1]
+        rospy.loginfo("Waypoint: {},{}".format(x,y))
         [qx,qy,w,z]=quaternion_from_euler(0,0,float(self.wayZLine.text()))
-        nodeStr = self.jackal_names[self.currentJackal] + '/move_base'
-        sac = actionlib.SimpleActionClient(nodeStr, MoveBaseAction )
-        #goal
+        #create goal
         goal = MoveBaseGoal()
         goal.target_pose.pose.position.x = x
         goal.target_pose.pose.position.y = y
@@ -475,23 +513,53 @@ class myWidget( QWidget ):
         goal.target_pose.pose.orientation.z = z
         goal.target_pose.header.frame_id = 'map'
         goal.target_pose.header.stamp = rospy.Time.now()
-        #start listner
-        sac.wait_for_server()
-
-        #send goal
-        sac.send_goal(goal)
-        print "Sending goal:",x,y,w,z
-        #nodeStr2 = nodeStr + '/result'
-        #rospy.Subscriber(nodeStr2,MoveBaseActionResult,self.resultChecker)
-        while sac.get_result()==None:
-            self.updateMap()
+        #call the move function
+        self.moveToWaypoint(goal)
 
 
-    #flag when finished moving
-    def resultChecker(self,msg):
-        self.flag_result = 1
-        print("here")
+    #publish a goal to move_base
+    def moveToWaypoint(self,goal):
+        self.sac.wait_for_server()
+        self.sac.send_goal(goal)
+        self.updateMap()
 
+    def getWaypoints(self):
+        if self.jackal_names[self.currentJackal] == 'TARS':
+            spawn = self.TARS_spawn
+        elif self.jackal_names[self.currentJackal] == 'CASE':
+            spawn = self.CASE_spawn
+        elif self.jackal_names[self.currentJackal] == 'KIPP':
+            spawn = self.KIPP_spawn
+        else:
+            spawn = [0,0]
+        loc = ('/home/cohrint/catkin_ws/src/jackal_controller/src/waypoints.xls')
+        wb = xlrd.open_workbook(loc)
+        sheet = wb.sheet_by_index(0)
+        self.waypoints = numpy.zeros((sheet.nrows-1,3))
+        print(self.waypoints)
+        print(sheet.ncols)
+        for i in range(0,sheet.ncols-1):
+            print(i)
+            #print(sheet.ncols)
+            #print(sheet.cell_value(1,1))
+            for j in range(1,sheet.nrows):
+                #print(sheet.cell_value(j,i))
+                self.waypoints[j-1,i] = sheet.cell_value(j,i) 
+            print(self.waypoints)
+        print(self.waypoints)
+        for i in range(sheet.nrows-1):
+            [qx,qy,w,z]=quaternion_from_euler(0,0,float(self.waypoints[i,2]))
+            x = self.waypoints[i,0] + spawn[0]
+            y = self.waypoints[i,1] + spawn[1]
+            goal = MoveBaseGoal()
+            goal.target_pose.pose.position.x = x
+            goal.target_pose.pose.position.y = y
+            goal.target_pose.pose.orientation.w = w
+            goal.target_pose.pose.orientation.z = z
+            goal.target_pose.header.frame_id = 'map'
+            goal.target_pose.header.stamp = rospy.Time.now()
+            self.moveToWaypoint(goal)
+            self.sac.wait_for_result()
 
 if __name__ == '__main__':
     try:
