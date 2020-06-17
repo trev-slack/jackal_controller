@@ -47,6 +47,7 @@ class myWidget( QWidget ):
         self.gazebo_loc = numpy.zeros((self.num_jackals,6,1))
         self.odom_loc = numpy.zeros((self.num_jackals,3,1))
         self.odom_buffer = numpy.zeros((self.num_jackals,3))
+        self.all_data = numpy.zeros((self.num_jackals,9))
         self.subbed = False
         #label formating variables
         self.old_vel = self.lin
@@ -372,9 +373,17 @@ class myWidget( QWidget ):
         #buffer is full
         if numpy.count_nonzero(self.odom_buffer)==9:
             self.odom_loc = numpy.dstack((self.odom_loc,self.odom_buffer))
+            self.pushtoSave()
             self.odom_buffer = numpy.zeros((self.num_jackals,3))
         self.odom_buffer[self.jackal_names.index(name)] = row
 
+    def pushtoSave(self):
+        
+        row = numpy.hstack((self.odom_buffer,self.row_loc))
+        #rospy.loginfo(numpy.shape(self.all_data))
+        #rospy.loginfo(numpy.shape(row))
+        self.all_data = numpy.dstack((self.all_data,row))
+        #rospy.loginfo(self.all_data)
 
     # Write the array to disk
     def writeLocationData(self):
@@ -394,6 +403,16 @@ class myWidget( QWidget ):
             outfile_gazebo.write('Gazebo Array shape {0} {1} {2}\n'.format(sh[0],sh[1],sh[2]))
             #itterate equivalent to data[:,:,i]
             for data_slice_gazebo in self.gazebo_loc[:][:]:
+                #write to file, round to 2 decimal places
+                numpy.savetxt(outfile_gazebo, data_slice_gazebo, fmt='%-7.2f')
+                #break between slices
+                outfile_gazebo.write('# New slice\n')
+        with open('position_data.txt','w') as outfile_gazebo:
+            #header with shape
+            sh = self.gazebo_loc.shape
+            outfile_gazebo.write('Position Array shape {0} {1} {2}\n'.format(sh[0],sh[1],sh[2]))
+            #itterate equivalent to data[:,:,i]
+            for data_slice_gazebo in self.all_data[:][:]:
                 #write to file, round to 2 decimal places
                 numpy.savetxt(outfile_gazebo, data_slice_gazebo, fmt='%-7.2f')
                 #break between slices
@@ -470,7 +489,7 @@ class myWidget( QWidget ):
         self.jackal_names = object_names[self.otherObjects:]
         self.num_jackals = len(self.jackal_names)
         #set up combobox
-        row_loc = numpy.zeros((self.num_jackals,6))
+        self.row_loc = numpy.zeros((self.num_jackals,6))
         #get x,y location and angles
         for w in range(0, self.num_jackals):
             #get gazebo locations, subtracting of starting position to get in local coords
@@ -488,13 +507,13 @@ class myWidget( QWidget ):
             orientation_q = (msg.pose[w+1]).orientation
             orientation_list = [orientation_q.x,orientation_q.y,orientation_q.z,orientation_q.w]
             (roll,pitch,yaw) = euler_from_quaternion(orientation_list)     
-            row_loc[w] = [x,y,z,roll,pitch,yaw]
+            self.row_loc[w] = [x,y,z,roll,pitch,yaw]
         #check if first location
         all_zeros = not numpy.any(self.gazebo_loc)
         if all_zeros:
-            self.gazebo_loc = row_loc
+            self.gazebo_loc = self.row_loc
         else:
-            self.gazebo_loc = numpy.dstack((self.gazebo_loc,row_loc))
+            self.gazebo_loc = numpy.dstack((self.gazebo_loc,self.row_loc))
             #print("stacking location data")
         #set up combobox
         if not self.setup:
@@ -504,9 +523,14 @@ class myWidget( QWidget ):
 
     #get target angle and distance
     def getTarget(self):
-        start = self.odom_loc[self.currentJackal,0:1,-1]
-        print(start[0])
-        print(start[1])
+        if self.jackal_names[self.currentJackal] == 'TARS':
+            spawn = self.TARS_spawn
+        elif self.jackal_names[self.currentJackal] == 'CASE':
+            spawn = self.CASE_spawn
+        elif self.jackal_names[self.currentJackal] == 'KIPP':
+            spawn = self.KIPP_spawn
+        else:
+            spawn = [0,0]
         # if self.jackal_names[self.currentJackal] == 'TARS':
         #     spawn = self.TARS_spawn
         # elif self.jackal_names[self.currentJackal] == 'CASE':
@@ -515,9 +539,8 @@ class myWidget( QWidget ):
         #     spawn = self.KIPP_spawn
         # else:
         #     spawn = [0,0]
-        x = float(self.wayXLine.text()) + start[0]
-        y = float(self.wayYLine.text()) + start[1]
-        rospy.loginfo(start)
+        x = float(self.wayXLine.text()) + spawn[0]
+        y = float(self.wayYLine.text()) + spawn[1]
         rospy.loginfo("Waypoint: {},{}".format(x,y))
         [qx,qy,w,z]=quaternion_from_euler(0,0,float(self.wayZLine.text()))
         #create goal
