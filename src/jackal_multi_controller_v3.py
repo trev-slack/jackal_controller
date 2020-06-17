@@ -48,7 +48,6 @@ class myWidget( QWidget ):
         self.odom_loc = numpy.zeros((self.num_jackals,3,1))
         self.odom_buffer = numpy.zeros((self.num_jackals,3))
         self.subbed = False
-        self.firstodom = [True,True,True]
         #label formating variables
         self.old_vel = self.lin
         self.old_ang = self.ang
@@ -127,6 +126,8 @@ class myWidget( QWidget ):
         #commit layout
         self.setLayout( main_layout )
 
+        
+
 
     #creates position map
     def createMap(self):
@@ -166,7 +167,7 @@ class myWidget( QWidget ):
         ##print(self.odom_loc)
         #print("==========")
         self._dynamic_ax.plot(self.gazebo_loc[self.currentJackal,0,:],self.gazebo_loc[self.currentJackal,1,:],label = 'Past Gazebo')
-        self._dynamic_ax.plot(self.odom_loc[self.currentJackal,0,:],self.odom_loc[self.currentJackal,1,:],label = 'Past Odometry')
+        self._dynamic_ax.plot(self.odom_loc[self.currentJackal,0,1:],self.odom_loc[self.currentJackal,1,1:],label = 'Past Odometry')
         #plot current position
         self._dynamic_ax.scatter(self.gazebo_loc[self.currentJackal,0,-1],self.gazebo_loc[self.currentJackal,1,-1],label='Current Gazebo')
         self._dynamic_ax.scatter(self.odom_loc[self.currentJackal,0,-1],self.odom_loc[self.currentJackal,1,-1],label='Current Odometry')
@@ -317,7 +318,7 @@ class myWidget( QWidget ):
         self.pushButtonSave.pressed.connect(self.writeLocationData)
         self.pushButtonLoad.pressed.connect(self.readLocationData)
         self.pushButtonCommit.clicked.connect(self.getTarget)
-        self.pushButtonCue.clicked.connect(self.getWaypoints)
+        self.pushButtonCue.pressed.connect(self.getWaypoints)
 
 
     #update linear speed label
@@ -370,11 +371,6 @@ class myWidget( QWidget ):
         row = [x,y,yaw]
         #buffer is full
         if numpy.count_nonzero(self.odom_buffer)==9:
-            #if first odom data
-            # if self.firstodom[self.currentJackal] == True:
-            #     self.odom_loc = self.odom_buffer
-            #     self.firstodom[self.currentJackal] == False
-            # else:
             self.odom_loc = numpy.dstack((self.odom_loc,self.odom_buffer))
             self.odom_buffer = numpy.zeros((self.num_jackals,3))
         self.odom_buffer[self.jackal_names.index(name)] = row
@@ -392,7 +388,16 @@ class myWidget( QWidget ):
                 numpy.savetxt(outfile, data_slice, fmt='%-7.2f')
                 #break between slices
                 outfile.write('# New slice\n')    
-
+        with open('gazebo_data.txt','w') as outfile_gazebo:
+            #header with shape
+            sh = self.gazebo_loc.shape
+            outfile_gazebo.write('Gazebo Array shape {0} {1} {2}\n'.format(sh[0],sh[1],sh[2]))
+            #itterate equivalent to data[:,:,i]
+            for data_slice_gazebo in self.gazebo_loc[:][:]:
+                #write to file, round to 2 decimal places
+                numpy.savetxt(outfile_gazebo, data_slice_gazebo, fmt='%-7.2f')
+                #break between slices
+                outfile_gazebo.write('# New slice\n')
 
     #read location data in from disk
     def readLocationData(self):
@@ -402,6 +407,12 @@ class myWidget( QWidget ):
         self.odom_loc = numpy.loadtxt('odom_data.txt',skiprows=1)
         # original shape of the array
         self.odom_loc = self.odom_loc.reshape((array_shape[0],array_shape[1],array_shape[2]))       
+        with open('gazebo_data.txt') as infile:
+            array_shape_line = infile.readline()
+        array_shape = [int(s) for s in array_shape_line.split() if s.isdigit()] 
+        self.gazebo_loc = numpy.loadtxt('gazebo_data.txt',skiprows=1)
+        # original shape of the array
+        self.gazebo_loc = self.gazebo_loc.reshape((array_shape[0],array_shape[1],array_shape[2]))       
         self.updateMap()
 
 
@@ -484,6 +495,7 @@ class myWidget( QWidget ):
             self.gazebo_loc = row_loc
         else:
             self.gazebo_loc = numpy.dstack((self.gazebo_loc,row_loc))
+            #print("stacking location data")
         #set up combobox
         if not self.setup:
             self.updateSelector()
@@ -492,17 +504,20 @@ class myWidget( QWidget ):
 
     #get target angle and distance
     def getTarget(self):
-        if self.jackal_names[self.currentJackal] == 'TARS':
-            spawn = self.TARS_spawn
-        elif self.jackal_names[self.currentJackal] == 'CASE':
-            spawn = self.CASE_spawn
-        elif self.jackal_names[self.currentJackal] == 'KIPP':
-            spawn = self.KIPP_spawn
-        else:
-            spawn = [0,0]
-        self.flag_result = 0
-        x = float(self.wayXLine.text()) + spawn[0]
-        y = float(self.wayYLine.text()) + spawn[1]
+        start = self.odom_loc[self.currentJackal,0:1,-1]
+        print(start[0])
+        print(start[1])
+        # if self.jackal_names[self.currentJackal] == 'TARS':
+        #     spawn = self.TARS_spawn
+        # elif self.jackal_names[self.currentJackal] == 'CASE':
+        #     spawn = self.CASE_spawn
+        # elif self.jackal_names[self.currentJackal] == 'KIPP':
+        #     spawn = self.KIPP_spawn
+        # else:
+        #     spawn = [0,0]
+        x = float(self.wayXLine.text()) + start[0]
+        y = float(self.wayYLine.text()) + start[1]
+        rospy.loginfo(start)
         rospy.loginfo("Waypoint: {},{}".format(x,y))
         [qx,qy,w,z]=quaternion_from_euler(0,0,float(self.wayZLine.text()))
         #create goal
@@ -519,11 +534,29 @@ class myWidget( QWidget ):
 
     #publish a goal to move_base
     def moveToWaypoint(self,goal):
+        #print("New Waypoint")
+        #self.updateMap
+        #tmpfeedback = None
         self.sac.wait_for_server()
         self.sac.send_goal(goal)
-        self.updateMap()
+        #while tmpfeedback != None:
+            #print("full")
+        #print(self.sac.get_goal_status_text())
+
+    def done(self,msg,result):
+        print("done")
+
+    def active(self):
+        print("active")
+
+    def feedback(self,msg):
+        print("feedback")
+        #self.updateMap()
 
     def getWaypoints(self):
+        # if self.pushButtonCue.isDown() == True:
+        #     print("Down")
+        #     self.updateMap()
         if self.jackal_names[self.currentJackal] == 'TARS':
             spawn = self.TARS_spawn
         elif self.jackal_names[self.currentJackal] == 'CASE':
@@ -536,17 +569,17 @@ class myWidget( QWidget ):
         wb = xlrd.open_workbook(loc)
         sheet = wb.sheet_by_index(0)
         self.waypoints = numpy.zeros((sheet.nrows-1,3))
-        print(self.waypoints)
-        print(sheet.ncols)
+        #print(self.waypoints)
+        #print(sheet.ncols)
         for i in range(0,sheet.ncols-1):
-            print(i)
+            #print(i)
             #print(sheet.ncols)
             #print(sheet.cell_value(1,1))
             for j in range(1,sheet.nrows):
                 #print(sheet.cell_value(j,i))
                 self.waypoints[j-1,i] = sheet.cell_value(j,i) 
-            print(self.waypoints)
-        print(self.waypoints)
+            #print(self.waypoints)
+        #$print(self.waypoints)
         for i in range(sheet.nrows-1):
             [qx,qy,w,z]=quaternion_from_euler(0,0,float(self.waypoints[i,2]))
             x = self.waypoints[i,0] + spawn[0]
@@ -559,7 +592,15 @@ class myWidget( QWidget ):
             goal.target_pose.header.frame_id = 'map'
             goal.target_pose.header.stamp = rospy.Time.now()
             self.moveToWaypoint(goal)
+            # while self.sac.wait_for_result() == False:
+            #     print("update")
+            #     self.updateMap()
             self.sac.wait_for_result()
+            print(self.sac.wait_for_result())
+            #if self.sac.wait_for_result() == True:
+                #print("Sucess")
+                #self.updateMap()
+            #self.updateMap()
 
 if __name__ == '__main__':
     try:
